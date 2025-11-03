@@ -1,7 +1,7 @@
 from __future__ import annotations
-import os, re, glob
+import os, re, glob, math, warnings
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, Any, List
 import numpy as np
 import cv2
 
@@ -105,6 +105,20 @@ def rotate_keep(img: np.ndarray, ang: float) -> np.ndarray:
     M = cv2.getRotationMatrix2D((w/2,h/2), ang, 1.0)
     return cv2.warpAffine(img, M, (w,h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
+def rotate_any(arr: np.ndarray, ang: float) -> np.ndarray:
+    if arr.ndim == 2:
+        return rotate_keep(arr, ang)
+    ch = arr.shape[2]
+    out = [rotate_keep(arr[:,:,c], ang) for c in range(ch)]
+    return np.stack(out, axis=2)
+
+def resize_any(arr: np.ndarray, size: Tuple[int,int], interpolation: int) -> np.ndarray:
+    if arr.ndim == 2:
+        return cv2.resize(arr, size, interpolation=interpolation)
+    ch = arr.shape[2]
+    out = [cv2.resize(arr[:,:,c], size, interpolation=interpolation) for c in range(ch)]
+    return np.stack(out, axis=2)
+
 def edge_closeness_map(img: np.ndarray) -> np.ndarray:
     g = (to_gray01(img)*255).astype(np.uint8)
     edges = cv2.Canny(g, 30, 60)
@@ -115,23 +129,15 @@ def edge_closeness_map(img: np.ndarray) -> np.ndarray:
     return closeness
 
 def phase_correlation_shift(a_gray01: np.ndarray, b_gray01: np.ndarray) -> Tuple[float,float]:
-    ha, wa = a_gray01.shape
-    hb, wb = b_gray01.shape
-    h = min(ha, hb)
-    w = min(wa, wb)
-    def center_crop(img: np.ndarray, h: int, w: int) -> np.ndarray:
-        H, W = img.shape
-        y0 = max(0, (H - h) // 2); x0 = max(0, (W - w) // 2)
-        return img[y0:y0+h, x0:x0+w]
-    A = center_crop(a_gray01, h, w)
-    B = center_crop(b_gray01, h, w)
-    win = cv2.createHanningWindow((w, h), cv2.CV_32F)
-    (dx, dy), _ = cv2.phaseCorrelate((A*win).astype(np.float32), (B*win).astype(np.float32))
+    win = cv2.createHanningWindow((a_gray01.shape[1], a_gray01.shape[0]), cv2.CV_32F)
+    (dx, dy), _ = cv2.phaseCorrelate((a_gray01*win).astype(np.float32), (b_gray01*win).astype(np.float32))
     return float(dx), float(dy)
 
 def ssim_map(a_gray01: np.ndarray, b_gray01: np.ndarray) -> np.ndarray:
     if _ssim is not None:
-        _, smap = _ssim(a_gray01, b_gray01, full=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, smap = _ssim(a_gray01, b_gray01, full=True)
         return 1.0 - smap
     return np.abs(a_gray01 - b_gray01)
 
@@ -147,10 +153,7 @@ def smart_path(path_str: str, base_dir: str = ".", fallback_dir: Optional[str] =
 
 def parse_two_image_indices(question: str, n_images: int) -> Tuple[int, int]:
     q = question.lower()
-    ord_map = {
-        "first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4,
-        "sixth": 5, "seventh": 6, "eighth": 7, "ninth": 8, "tenth": 9, "last": -1
-    }
+    ord_map = {"first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4, "sixth": 5, "seventh": 6, "eighth": 7, "ninth": 8, "tenth": 9, "last": -1}
     ord_hits = re.findall(r"\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last)\b", q)
     indices: List[int] = []
     for w in ord_hits:
@@ -178,29 +181,72 @@ def parse_two_image_indices(question: str, n_images: int) -> Tuple[int, int]:
         return indices[0], (indices[0] + 1) % n_images
     return indices[0], indices[1]
 
-def parse_ref_bbox_from_question(q: str) -> Optional[BBox]:
-    m = re.search(r"<\|box_start\|\>\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*,\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*<\|box_end\|\>", q)
+def parse_ref_bbox_from_question(question: str) -> Optional[BBox]:
+    s = question
+    m = re.search(r"<\|box_start\|>\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*,\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*<\|box_end\|>", s)
     if not m:
         return None
-    x1, y1, x2, y2 = map(int, m.groups())
-    return BBox(x1, y1, x2, y2)
+    x1,y1,x2,y2 = map(int, m.groups())
+    return BBox(x1,y1,x2,y2)
 
-def parse_region_index_from_question(q: str, default: int = 1) -> int:
-    ords = {"first":1,"second":2,"third":3,"fourth":4,"fifth":5}
-    m = re.search(r'\b(first|second|third|fourth|fifth)\s+region\b', q.lower())
+def parse_region_index_from_question(question: str, default: int = 1) -> int:
+    q = question.lower()
+    ord_map = {"first":1,"second":2,"third":3,"fourth":4,"fifth":5}
+    for w,v in ord_map.items():
+        if re.search(rf"\b{w}\b", q):
+            return v
+    m = re.search(r"\bregion\s*(\d+)\b", q)
     if m:
-        return ords[m.group(1)]
-    m2 = re.search(r'\b(first|second|third|fourth|fifth)\b', q.lower())
-    return ords.get(m2.group(1), default) if m2 else default
+        return max(1, int(m.group(1)))
+    return default
 
-def rotate_any(arr, ang):
-    if arr.ndim==2: return rotate_keep(arr, ang)
-    ch = arr.shape[2]
-    out = [ rotate_keep(arr[:,:,c], ang) for c in range(ch) ]
-    return np.stack(out, axis=2)
+def ensure_same_size(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    if a.shape[:2] == b.shape[:2]:
+        return a, b
+    H, W = b.shape[:2]
+    return cv2.resize(a, (W, H), interpolation=cv2.INTER_LINEAR), b
 
-def resize_any(arr, size, interpolation):
-    if arr.ndim==2: return cv2.resize(arr, size, interpolation=interpolation)
-    ch = arr.shape[2]
-    out = [ cv2.resize(arr[:,:,c], size, interpolation=interpolation) for c in range(ch) ]
-    return np.stack(out, axis=2)
+def ecc_register(src: np.ndarray, dst: np.ndarray, warp_mode: int = cv2.MOTION_EUCLIDEAN, iters: int = 100, eps: float = 1e-5) -> Tuple[np.ndarray, np.ndarray]:
+    s, d = to_gray01(src), to_gray01(dst)
+    warp_matrix = np.eye(3,3, dtype=np.float32) if warp_mode == cv2.MOTION_HOMOGRAPHY else np.eye(2,3, dtype=np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, iters, eps)
+    try:
+        _, warp_matrix = cv2.findTransformECC(d, s, warp_matrix, warp_mode, criteria, None, 5)
+    except cv2.error:
+        pass
+    h, w = d.shape
+    if warp_mode == cv2.MOTION_HOMOGRAPHY:
+        ws = cv2.warpPerspective(s, warp_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+    else:
+        ws = cv2.warpAffine(s, warp_matrix, (w, h), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+    return ws, warp_matrix
+
+def is_registered_task(img_a: np.ndarray, img_b: np.ndarray, shift_tol_px: Optional[float] = None, ssim_gain_tol: float = 0.02) -> Tuple[bool, Dict]:
+    A, B = ensure_same_size(img_a, img_b)
+    ga, gb = to_gray01(A), to_gray01(B)
+    min_side = min(ga.shape)
+    dyn_shift_tol = max(2.0, 0.01 * float(min_side)) if shift_tol_px is None else float(shift_tol_px)
+    try:
+        dx, dy = phase_correlation_shift(ga, gb)
+        shift_mag = math.hypot(dx, dy)
+    except cv2.error:
+        shift_mag = 0.0
+    if _ssim is not None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ssim_before = float(_ssim(ga, gb))
+        ws, _ = ecc_register(A, B, warp_mode=cv2.MOTION_EUCLIDEAN)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ssim_after = float(_ssim(ws, gb))
+        ssim_gain = max(0.0, ssim_after - ssim_before)
+        decision = (shift_mag <= dyn_shift_tol) and (ssim_gain <= ssim_gain_tol)
+        metrics = {"shift_px": shift_mag, "ssim_before": ssim_before, "ssim_after": ssim_after, "ssim_gain": ssim_gain, "shift_tol_px": dyn_shift_tol, "ssim_gain_tol": ssim_gain_tol}
+    else:
+        mae_before = float(np.mean(np.abs(ga - gb)))
+        ws, _ = ecc_register(A, B, warp_mode=cv2.MOTION_EUCLIDEAN)
+        mae_after = float(np.mean(np.abs(ws - gb)))
+        mae_gain = max(0.0, mae_before - mae_after)
+        decision = (shift_mag <= dyn_shift_tol) and (mae_gain <= 0.01)
+        metrics = {"shift_px": shift_mag, "mae_before": mae_before, "mae_after": mae_after, "mae_gain": mae_gain, "shift_tol_px": dyn_shift_tol, "mae_gain_tol": 0.01}
+    return bool(decision), metrics
