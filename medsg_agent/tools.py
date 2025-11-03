@@ -3,17 +3,11 @@ import json
 from typing import Optional, List, Tuple, Dict
 from pydantic import BaseModel, Field
 from langchain.tools import StructuredTool
-
-from medsg_agent.utils import (
-    read_image,
-    BBox,
-    is_registered_task,
-)
-
+from medsg_agent.utils import read_image, BBox, is_registered_task
 from medsg_agent.tasks.task1_registered_diff import get_subtracted_bbox
 from medsg_agent.tasks.task2_nonregistered_diff import get_diff_bbox_with_registration_robust
 from medsg_agent.tasks.task3_multi_view import multi_view_grounding_bbox
-from medsg_agent.tasks.task5_concept_match import concept_match_bbox
+from medsg_agent.tasks.task5_concept_match import run as concept_match_run
 from medsg_agent.tasks.task6_patch_grounding import patch_grounding_bbox_robust
 from medsg_agent.tasks.task7_crossmodal import crossmodal_grounding_bbox
 
@@ -26,7 +20,6 @@ try:
     from medsg_agent.tasks.task2_nonregistered_diff_dynamic import get_diff_bbox_with_registration_dynamic as _nrdg_dynamic
 except Exception:
     _nrdg_dynamic = None
-
 
 class TwoImageArgs(BaseModel):
     image_a: str = Field(..., description="Path to first image (reference A).")
@@ -86,11 +79,9 @@ class AutoDiffArgs(BaseModel):
     edge_band_frac: Optional[float] = Field(default=0.02)
     base_thresh_nonregistered: Optional[float] = Field(default=0.25)
 
-
 def _fmt_out(bbox, conf, details):
     out = {"bbox": None if bbox is None else BBox(bbox.x1, bbox.y1, bbox.x2, bbox.y2).to_dict(), "confidence": float(conf), "details": details}
     return json.dumps(out)
-
 
 def multi_view_grounding_bbox_tool(ref_image: str, tgt_image: str, ref_bbox: List[int], method: str = "auto") -> str:
     R = read_image(ref_image); T = read_image(tgt_image)
@@ -100,10 +91,11 @@ def multi_view_grounding_bbox_tool(ref_image: str, tgt_image: str, ref_bbox: Lis
     return _fmt_out(bbox, conf, det)
 
 def concept_match_bbox_tool(ref_image: str, tgt_image: str, ref_bbox: Optional[List[int]] = None) -> str:
-    R = read_image(ref_image); T = read_image(tgt_image)
-    rb = BBox(*ref_bbox) if ref_bbox else None
-    bbox, conf, det = concept_match_bbox(R, rb, T, method="auto")
-    det = {**det, "tool": "concept_match_bbox"}
+    out = concept_match_run(ref_image, tgt_image, ref_bbox=ref_bbox)
+    b = out.get("bbox", None)
+    bbox = None if b is None else BBox(b["x1"], b["y1"], b["x2"], b["y2"])
+    conf = out.get("confidence", 0.0)
+    det = {**out.get("details", {}), "tool": "concept_match_bbox"}
     return _fmt_out(bbox, conf, det)
 
 def patch_grounding_bbox_tool(source_image: str, patch_image: str, scales: Optional[List[float]] = None, rotations: Optional[List[float]] = None, alpha: float = 0.6) -> str:
@@ -145,7 +137,6 @@ def auto_diff_bbox_tool(image_a: str, image_b: str, method: str = "ssim", morph:
     bbox, conf, det = _call_nonregistered(A, B, use_phasecorr_first=use_phasecorr_first, edge_band_frac=edge_band_frac, morph=morph, base_thresh=base_thresh_nonregistered, dynamic=dynamic)
     det = {**det, "mode": "nonregistered", "routings_metrics": metrics, "tool": "auto_diff_bbox"}
     return _fmt_out(bbox, conf, det)
-
 
 def get_tools():
     return [

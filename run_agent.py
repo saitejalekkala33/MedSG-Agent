@@ -2,7 +2,6 @@ from medsg_agent import build_agent
 
 agent = build_agent()
 
-# RDG (Registered diff)
 q1 = (
     "Compare these two images carefully and give me the coordinates of their difference (registered) and output bbox JSON. "
     '{"images": ['
@@ -12,7 +11,6 @@ q1 = (
 )
 print(agent.run(q1))
 
-# NRDG (Non-registered diff)
 q2 = (
     "Compare these two images carefully and give me the coordinates of their NR difference and output bbox JSON. "
     '{"images": ['
@@ -22,7 +20,6 @@ q2 = (
 )
 print(agent.run(q2))
 
-# Multi-view
 q3 = (
     "These images share one object in common (the object marked with red bounding box in the first image "
     "<|box_start|>(155,120),(204,173)<|box_end|>). Recognize and locate this object in the second image. "
@@ -34,7 +31,6 @@ q3 = (
 )
 print(agent.run(q3))
 
-# Patch
 q4 = (
     "You are given a source image followed by its several regions. Please locate the first region picture in the source image. "
     '{"images": ['
@@ -46,7 +42,6 @@ q4 = (
 )
 print(agent.run(q4))
 
-# Cross-modal
 q5 = (
     "The following are two images for you to consider. For the area marked by the red bounding box in the first image, "
     "identify and locate the corresponding area in the second image that serves a similar function or shares a similar meaning. "
@@ -57,15 +52,12 @@ q5 = (
 )
 print(agent.run(q5))
 
-
-# from medsg_agent.agent import build_agent
-
-# if __name__ == "__main__":
-#     agent = build_agent()
-#     question = (
-#         "Given these two CT slices, find the difference and output bbox coordinates as JSON. "
-#         '{"image_a":"C:/cpp/Medical/human_samples/Tools/registered_Diff/CTPelvic1K_CT_LumbarSpine_npy_imgs_ori_casenum_0027_sliceid_219.png", '
-#         '"image_b":"C:/cpp/Medical/human_samples/Tools/registered_Diff/CTPelvic1K_CT_LumbarSpine_npy_imgs_casenum_0027_sliceid_219.png"}'
-#     )
-#     print(agent.run(question))
-
+q6 = (
+    "Find and locate where does the object in image-1 locate in the image-2."
+    "visual-concept match"
+    '{"images": ['
+    '"C:/cpp/Medical/human_samples/Tools/ufaq_concept/LUNA16_CT_LeftLung_npy_imgs_casenum_619372068417051974713149104919_sliceid_143.png", '
+    '"C:/cpp/Medical/human_samples/Tools/ufaq_concept/LUNA16_CT_LeftLung_npy_imgs_ori_casenum_619372068417051974713149104919_sliceid_143.png"'
+    ']}'
+)
+print(agent.run(q6))
